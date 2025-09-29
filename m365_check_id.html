@@ -1,0 +1,188 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Domain Tenant ID Checker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #e2e8f0;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f1f5f9;
+            font-weight: bold;
+        }
+        td:nth-child(2) {
+            word-break: break-all;
+            overflow-wrap: break-word;
+        }
+        .copy-btn {
+            background-color: #4b5563;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .copy-btn:hover {
+            background-color: #6b7280;
+        }
+        .copy-btn.copied {
+            background-color: #10b981;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="bg-white p-8 rounded-lg shadow-lg w-full max-w-3xl">
+        <h1 class="text-3xl font-bold mb-6 text-center">Domain Tenant ID Checker</h1>
+        <div class="mb-6">
+            <label for="domain" class="block text-sm font-medium text-gray-700">Enter Domain:</label>
+            <input type="text" id="domain" placeholder="example.com" class="mt-2 p-3 w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <button onclick="fetchTenantInfo()" class="w-full bg-blue-500 text-white p-3 rounded-md hover:bg-blue-600 text-lg">Check Domain</button>
+        <div id="result" class="mt-6 p-6 bg-gray-50 rounded-md hidden">
+            <h2 class="text-xl font-semibold mb-3">Results:</h2>
+            <table id="output">
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+            <p id="error" class="text-red-500 mt-3 hidden"></p>
+        </div>
+    </div>
+
+    <script>
+        async function fetchTenantInfo() {
+            const domain = document.getElementById('domain').value.trim();
+            const resultDiv = document.getElementById('result');
+            const tableBody = document.getElementById('output').querySelector('tbody');
+            const errorP = document.getElementById('error');
+
+            // Reset previous results
+            resultDiv.classList.add('hidden');
+            tableBody.innerHTML = '';
+            errorP.classList.add('hidden');
+            errorP.textContent = '';
+
+            if (!domain) {
+                resultDiv.classList.remove('hidden');
+                errorP.classList.remove('hidden');
+                errorP.textContent = 'Error: Please enter a valid domain.';
+                return;
+            }
+
+            const url = `https://login.microsoftonline.com/${domain}/.well-known/openid-configuration`;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Extract tenant ID from URLs (e.g., token_endpoint)
+                const tenantIdMatch = data.token_endpoint?.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i);
+                const tenantId = tenantIdMatch ? tenantIdMatch[1] : 'Not found';
+
+                // Prepare data for table
+                const displayData = {
+                    tenantId: tenantId,
+                    issuer: data.issuer || 'Not available',
+                    token_endpoint: data.token_endpoint || 'Not available',
+                    authorization_endpoint: data.authorization_endpoint || 'Not available'
+                };
+
+                // Populate table
+                Object.entries(displayData).forEach(([key, value]) => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${key}</td>
+                        <td>${value}</td>
+                        <td><button class="copy-btn" onclick="copyToClipboard('${value.replace(/'/g, "\\'")}')">Copy</button></td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+
+                resultDiv.classList.remove('hidden');
+            } catch (error) {
+                resultDiv.classList.remove('hidden');
+                errorP.classList.remove('hidden');
+                errorP.textContent = `Error fetching data: ${error.message}`;
+            }
+        }
+
+        async function copyToClipboard(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                const button = event.target;
+                button.classList.add('copied');
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    button.classList.remove('copied');
+                    button.textContent = 'Copy';
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy: ', err);
+            }
+        }
+    </script>
+</body>
+</html>
